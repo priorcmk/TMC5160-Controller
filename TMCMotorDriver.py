@@ -1,14 +1,16 @@
 import time
+import TMC5160RegMap
 
 class TMCstepperController:
 
     """TMCstepper Unit"""
-    def __init__(self, ser,regmap, device, StepPerDegree, GearRatio):
+    def __init__(self, ser,regmap, device, StepPerDegree, GearRatio, MaxAngle):
         self.ser=ser
         self.reg=regmap
         self.dev=device
         self.StepPerDegree=StepPerDegree
         self.GearRatio=GearRatio
+        self.MaxAngle=MaxAngle
 
     def crc_calc(self,data):         # from TMC5160 datasheet
         crc=0
@@ -87,6 +89,9 @@ class TMCstepperController:
 
 
     def moveToDegree(self,deg): # starts a fixed number of degree rotation
+        if deg>self.MaxAngle:
+            raise Exception("Invaild Postion")
+            return 0
         steps=round((deg/(self.StepPerDegree/256)*self.GearRatio))
         self.setReg(self.reg["XTARGET"],steps)
 
@@ -94,21 +99,50 @@ class TMCstepperController:
         timeStart=time.time()
         x=1
         while (x != 0):
+            #print(self.readReg("IOIN")[3] & 0x01)
             x=self.arrayToInt(self.readReg(self.reg["VACTUAL"]))
             #print(x)
-            if(time.time()-timeStart > 10):
-                print("The motor timed out while moving")
+            if(time.time()-timeStart > 99):
+                raise Exception("The motor timed out while moving")
                 return 0
-        if(self.readReg(self.reg["XACTUAL"]) != self.readReg(self.reg["XTARGET"])):
             if((self.readReg("IOIN")[3] & 0x01) == 0):
+                print(self.readReg("IOIN")[3] & 0x01)
                 self.setReg("XTARGET",0)
                 self.setReg("XACTUAL",0)
+                self.setReg("RAMPMODE",0)
                 print ("Homed")
                 return 1
-            print("Motion Error, did not move correctly")
+        if(self.readReg(self.reg["XACTUAL"]) != self.readReg(self.reg["XTARGET"])):
+            raise Exception("Motion Error, did not move correctly")
             print(self.readReg(self.reg["XACTUAL"]))
             print(self.readReg(self.reg["XTARGET"]))
             return 0
         return 1
     def disableDriver(self):
         self.setReg(self.reg["CHOPCONF"],0x10410150)
+
+    def setMotionMode(self, mode): # 0 position, 1 + velocity, 2 - velocity, 3 hold
+        self.setReg(self.reg["RAMPMODE"],mode)
+
+    def homeMotor(self, dir, velo): # 1 home in + dir 2 home in - dir
+        self.setReg(self.reg["VMAX"],velo)
+        self.setMotionMode(dir)
+        self.waitForStop()
+        if dir == 1:
+            dir = 2
+        else:
+            dir = 1
+        self.setReg(self.reg["SW_MODE"],0x00)
+        self.setMotionMode(dir)
+        while(self.readReg("IOIN")[3] & 0x01 == 0):
+            continue
+
+        self.setReg(self.reg["VMAX"],0)
+        #self.setReg("VMAX",velo)
+        self.setReg("XACTUAL",0)
+        self.setReg("XTARGET",0)
+        self.setReg("RAMPMODE",0)
+        self.setReg(self.reg["VMAX"],80000)
+        self.setReg(self.reg["SW_MODE"],0x1FE)
+
+        time.sleep(5)
